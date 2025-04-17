@@ -172,3 +172,35 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+#Front End
+web-fe/.workspaces
+
+web-fe/*.swp
+web-fe/*.tst
+
+web-fe/*.html
+web-fe/*.json
+web-fe/*.xml
+web-fe/*.csv
+web-fe/*.docx
+
+# Eclipse m2e generated files
+# Eclipse Core
+web-fe/.project
+# JDT-specific (Eclipse Java Development Tools)
+web-fe/.classpath
+web-fe/__pycache__
+
+#BackEnd
+sd-engine-be/faiss_db_index/
+sd-engine-be/.workspaces
+sd-engine-be/__pycache__
+
+#Terraform
+terraform/terraform.tfvars
+terraform/*.out
+terraform/.terraform*
+
+
