@@ -118,7 +118,22 @@ resource "aws_security_group" "genai_tc_app" {
         },
     ]
 #    id          = "sg-04814b3dd0087fbae"
-    ingress     = []
+#    ingress     = []
+
+  ingress  = [ 
+     {
+      cidr_blocks      = [ ]
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    self            = true
+    description     = "Allow all traffic from itself"
+      ipv6_cidr_blocks = []
+      prefix_list_ids  = []
+      security_groups  = []
+    }
+   ]
+
 #    name_prefix = null
 #    owner_id    = "637423404396"
 #    tags        = {}
@@ -374,7 +389,7 @@ resource "aws_lb" "genai_tc_lb" {
   load_balancer_type = "application"
   #security_groups    = ["sg-028fbf6c4c46ef684", "sg-0ea61b6e71b168969"]
   #security_groups    = ["sg-028fbf6c4c46ef684", aws_security_group.genai_ui_web.id]
-  security_groups    = [aws_security_group.genai_ui_web.id]
+  security_groups    = [aws_security_group.genai_tc_app.id, aws_security_group.genai_ui_web.id]
   subnets            = [
     aws_subnet.subnet_a.id,
     aws_subnet.subnet_b.id,
