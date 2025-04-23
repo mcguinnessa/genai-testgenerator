@@ -106,6 +106,48 @@ resource "aws_route_table_association" "subnet_c" {
   route_table_id = aws_route_table.gaitg-rt.id
 }
 
+#
+# VPC Endpoint for access to Bedrock Runtime
+#
+resource "aws_vpc_endpoint" "bedrock_runtime" {
+  vpc_id              = aws_vpc.gaitg_vpc.id
+  service_name        = "com.amazonaws.eu-west-2.bedrock-runtime"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id, aws_subnet.subnet_c.id]
+  security_group_ids  = [aws_security_group.gaitg_app_sg.id, aws_security_group.gaitg_bedrock_access_sg.id]
+  private_dns_enabled = true
+}
+
+#
+# DNS - Private namespace
+#
+resource "aws_service_discovery_private_dns_namespace" "gaitg_local" {
+  name        = "gaitg.local"
+  description = "For the GenAI Test Generator application"
+  vpc         = aws_vpc.gaitg_vpc.id
+
+  tags = {
+    Name = "gaitg.local"
+  }
+}
+
+#
+# DNS - Discovery service so Front End can refer to Back End by name
+#
+resource "aws_service_discovery_service" "gaitg_be" {
+  name = "gaitg-be"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.gaitg_local.id
+    dns_records {
+      type = "A"
+      ttl  = 15
+    }
+    routing_policy = "MULTIVALUE"
+  }
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
 ####################################################################
 #
 # SECURITY GROUPS
@@ -231,9 +273,17 @@ resource "aws_security_group" "gaitg_bedrock_access_sg" {
 }
 
 
-#IAM role for creating instances
+####################################################################
+#
+# IAM 
+#
+####################################################################
+
+#
+# IAM Role for creating EC2 instances
+#
 resource "aws_iam_role" "ecs_instance_role" {
-  name = "ecsInstanceRole"
+  name = "gaitg-ecs-instance-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -246,20 +296,27 @@ resource "aws_iam_role" "ecs_instance_role" {
   })
 }
 
+#
+# Attach policy to create containers
+#
 resource "aws_iam_role_policy_attachment" "ecs_attach" {
   role       = aws_iam_role.ecs_instance_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
+#
+# Create profile to for the ECS Instances
+#
 resource "aws_iam_instance_profile" "ecs_instance_profile" {
-  name = "ecsInstanceProfile"
+  name = "gaitg-ecs-instance-profile"
   role = aws_iam_role.ecs_instance_role.name
 }
 
-
-#IAM role for executing tasks in ECS
+#
+# IAM Roles for executing Tasks
+#
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole2"
+  name = "gaitg-task-execution-role"
   assume_role_policy = jsonencode({
     Version = "2008-10-17",
     Statement = [{
@@ -272,17 +329,25 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   })
 }
 
+#
+# Attach policy for task execution
+#
 resource "aws_iam_role_policy_attachment" "ecs_attach_execution" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+####################################################################
+#
+# Capacity Reservations / Auto Scaling Groups 
+#
+####################################################################
 
-
-
-# Launch Template
-resource "aws_launch_template" "ecs_lt" {
-  name_prefix   = "ecs-lt-"
+#
+# Launch Template for EC2 instances in ASG
+#
+resource "aws_launch_template" "gaitg_ecs_lt" {
+  name_prefix   = "gaitg-ecs-lt-"
   image_id      = data.aws_ami.ecs.id
   instance_type = "t2.micro"
 
@@ -301,6 +366,9 @@ EOF
   }
 }
 
+#
+# Amazon Linux Image
+#
 data "aws_ami" "ecs" {
   most_recent = true
   owners      = ["amazon"]
@@ -311,9 +379,11 @@ data "aws_ami" "ecs" {
   }
 }
 
-#Auto Scaling Group
-resource "aws_autoscaling_group" "ecs_asg" {
-  name                      = "ecs-asg-genai"
+#
+# Auto Scaling Group (ASG)
+#
+resource "aws_autoscaling_group" "gaitg_asg" {
+  name                      = "gaitg-ecs-asg"
   max_size                  = 2
   min_size                  = 0 
   desired_capacity          = 2 
@@ -324,9 +394,9 @@ resource "aws_autoscaling_group" "ecs_asg" {
     aws_subnet.subnet_c.id
   ]
   launch_template {
-    id      = aws_launch_template.ecs_lt.id
+    id      = aws_launch_template.gaitg_ecs_lt.id
     #version = "$Latest"
-    version = aws_launch_template.ecs_lt.latest_version
+    version = aws_launch_template.gaitg_ecs_lt.latest_version
   }
   tag {
     key                 = "AmazonECSManaged"
@@ -335,12 +405,14 @@ resource "aws_autoscaling_group" "ecs_asg" {
   }
 }
 
+#
 # Capacity Provider
-resource "aws_ecs_capacity_provider" "genai_cp" {
-  name = "genai-cp"
+#
+resource "aws_ecs_capacity_provider" "gaitg_cp" {
+  name = "gaitg-cp"
 
   auto_scaling_group_provider {
-    auto_scaling_group_arn         = aws_autoscaling_group.ecs_asg.arn
+    auto_scaling_group_arn         = aws_autoscaling_group.gaitg_asg.arn
     managed_termination_protection = "ENABLED"
 
     managed_scaling {
@@ -353,28 +425,40 @@ resource "aws_ecs_capacity_provider" "genai_cp" {
   }
 }
 
+####################################################################
+#
+# Cluster for application
+#
+####################################################################
 
-
-
+#
 # Cluster
-resource "aws_ecs_cluster" "genai" {
-  name = "genai-web-cluster"
+#
+resource "aws_ecs_cluster" "gaitg_cluster" {
+  name = "gaitg-cluster"
 }
 
-# Associate cluster with ASG
-resource "aws_ecs_cluster_capacity_providers" "genai_cp_assoc" {
-  cluster_name         = aws_ecs_cluster.genai.name
-  capacity_providers   = [aws_ecs_capacity_provider.genai_cp.name]
+#
+# Associate cluster with Auto Scaling Group
+#
+resource "aws_ecs_cluster_capacity_providers" "gaitg_cp_assoc" {
+  cluster_name         = aws_ecs_cluster.gaitg_cluster.name
+  capacity_providers   = [aws_ecs_capacity_provider.gaitg_cp.name]
 
   default_capacity_provider_strategy {
-    capacity_provider = aws_ecs_capacity_provider.genai_cp.name
+    capacity_provider = aws_ecs_capacity_provider.gaitg_cp.name
     weight            = 1
     base              = 0
   }
 }
 
-resource "aws_lb" "genai_tc_lb" {
-  name               = "genai-tc-lb"
+####################################################################
+#
+# LOAD BALANCER
+#
+####################################################################
+resource "aws_lb" "gaitg_lb" {
+  name               = "gaitg-lb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.gaitg_app_sg.id, aws_security_group.gaitg_webui_sg.id]
@@ -386,16 +470,17 @@ resource "aws_lb" "genai_tc_lb" {
   ip_address_type = "ipv4"
 
   tags = {
-    Name = "genai-tc-lb"
+    Name = "gaitg-lb"
   }
 }
 
-
-resource "aws_lb_target_group" "existing_genai_fe_target" {
-  name                              = "ecs-genai--genai-tc-fe-alb"
+#
+# Target Group to FE
+#
+resource "aws_lb_target_group" "gaitg_fe_tg" {
+  name                              = "gaitg-fe-tg"
   port                              = 80
   protocol                          = "HTTP"
-#  vpc_id                            = "vpc-04fae15b271dcd9a6"
   vpc_id                            = aws_vpc.gaitg_vpc.id
   target_type                       = "ip"
   deregistration_delay              = 300
@@ -434,33 +519,41 @@ resource "aws_lb_target_group" "existing_genai_fe_target" {
   tags = {}
 }
 
-
-resource "aws_lb_listener" "http_listener" {
-  load_balancer_arn = aws_lb.genai_tc_lb.arn
+#
+# Listener
+#
+resource "aws_lb_listener" "gaitg_fe_listener" {
+  load_balancer_arn = aws_lb.gaitg_lb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    #target_group_arn = aws_lb_target_group.genai_fe_target.arn
-    target_group_arn = aws_lb_target_group.existing_genai_fe_target.arn
+    target_group_arn = aws_lb_target_group.gaitg_fe_tg.arn
   }
 }
 
-#Task for backend process
 
-resource "aws_ecs_task_definition" "genai_tc_be_td" {
-  family                   = "genai-tc-be-td"
+####################################################################
+#
+# BACK END
+#
+####################################################################
+
+#
+# Back End Task Definition
+#
+resource "aws_ecs_task_definition" "gaitg_be_td" {
+  family                   = "gaitg-be-td"
   requires_compatibilities = ["EC2"]
   network_mode            = "awsvpc"
   cpu                     = "1024"
   memory                  = "512"
-  #execution_role_arn      = "arn:aws:iam::637423404396:role/ecsTaskExecutionRole"
   execution_role_arn      = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
-      name               = "genai-be-task-container"
+      name               = "gaitg-be-task-container"
       image              = "mcguinnessa/genai-tc-be:latest"
       cpu                = 512
       memoryReservation  = 512
@@ -479,18 +572,18 @@ resource "aws_ecs_task_definition" "genai_tc_be_td" {
       environment = [
         {
           name  = "AWS_ACCESS_KEY_ID"
-          value = var.aws_access_key_id  # Use a variable or secret
+          value = var.aws_access_key_id  
         },
         {
           name  = "AWS_SECRET_ACCESS_KEY"
-          value = var.aws_secret_access_key  # Use a variable or secret
+          value = var.aws_secret_access_key 
         }
       ]
 
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = "/ecs/genai-be-task"
+          awslogs-group         = "/ecs/gaitg-be-task"
           awslogs-region        = "eu-west-2"
           awslogs-stream-prefix = "ecs"
           mode                  = "non-blocking"
@@ -513,68 +606,66 @@ resource "aws_ecs_task_definition" "genai_tc_be_td" {
 }
 
 
-# Service for back end process
+#
+# Back End Service
+#
 resource "aws_ecs_service" "gaitg_be_service" {
-#    availability_zone_rebalancing      = "ENABLED"
-#    cluster                            = "arn:aws:ecs:eu-west-2:637423404396:cluster/genai-web-cluster"
-    cluster                            = aws_ecs_cluster.genai.arn
-    deployment_maximum_percent         = 200
-    deployment_minimum_healthy_percent = 100
-    desired_count                      = 1
-    name                               = "genai-tc-be"
-    task_definition                    = aws_ecs_task_definition.genai_tc_be_td.arn
+  cluster                            = aws_ecs_cluster.gaitg_cluster.arn
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+  desired_count                      = 1
+  name                               = "gaitg-be"
+  task_definition                    = aws_ecs_task_definition.gaitg_be_td.arn
 
-    capacity_provider_strategy {
-        base              = 0
-        #capacity_provider = "Infra-ECS-Cluster-genai-web-cluster-96d1f640-EC2CapacityProvider-XFtKLZVEjtAa"
-        capacity_provider = aws_ecs_capacity_provider.genai_cp.name
-        weight            = 1
-    }
+  capacity_provider_strategy {
+    base              = 0
+    capacity_provider = aws_ecs_capacity_provider.gaitg_cp.name
+    weight            = 1
+  }
 
-    deployment_circuit_breaker {
-        enable   = true
-        rollback = true
-    }
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
-    deployment_controller {
-        type = "ECS"
-    }
+  deployment_controller {
+    type = "ECS"
+  }
 
-    network_configuration {
-        assign_public_ip = false
-#            "sg-04814b3dd0087fbae",
-        security_groups  = [
-#            "sg-028fbf6c4c46ef684",
-            aws_security_group.gaitg_app_sg.id,
-        ]
-        subnets          = [
-            aws_subnet.subnet_a.id,
-            aws_subnet.subnet_b.id,
-           aws_subnet.subnet_c.id
-#            "subnet-044ed30457d097ec8",
-#            "subnet-048f197fce1668d85",
-#            "subnet-093f92443cb5b3bf5",
-        ]
-    }
+  network_configuration {
+    assign_public_ip = false
+    security_groups  = [
+      aws_security_group.gaitg_app_sg.id,
+    ]
+    subnets          = [
+      aws_subnet.subnet_a.id,
+      aws_subnet.subnet_b.id,
+      aws_subnet.subnet_c.id
+    ]
+  }
 
-    service_registries {
-##        registry_arn   = "arn:aws:servicediscovery:eu-west-2:637423404396:service/srv-wm4okxwjezyqkv7o"
-        registry_arn   = aws_service_discovery_service.genai_tc_be.arn
-    }
-
-
+  service_registries {
+    registry_arn   = aws_service_discovery_service.gaitg_be.arn
+  }
 }
 
 
-# Task definition for Front End
-resource "aws_ecs_task_definition" "genai_tc_fe_td" {
-  family                   = "genai-tc-fe-td"
+####################################################################
+#
+# FRONT END
+#
+####################################################################
+
+#
+# Front End Task Definition
+#
+resource "aws_ecs_task_definition" "gaitg_fe_td" {
+  family                   = "gaitg-fe-td"
   network_mode             = "awsvpc"
   requires_compatibilities = ["EC2"]
   cpu                      = "512"
   memory                   = "512"
-  #execution_role_arn      = "arn:aws:iam::637423404396:role/ecsTaskExecutionRole"
-  execution_role_arn      = aws_iam_role.ecs_task_execution_role.arn
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
@@ -582,14 +673,14 @@ resource "aws_ecs_task_definition" "genai_tc_fe_td" {
 
   container_definitions = jsonencode([
     {
-      name                  = "genai-fe-task-container"
+      name                  = "gaitg-fe-task-container"
       image                 = "mcguinnessa/genai-tc-web:latest"
       cpu                   = 512
       memoryReservation     = 512
       essential             = true
       portMappings = [
         {
-          name          = "genai-fe-task-container-7860-tcp"
+          name          = "gaitg-fe-task-container-7860-tcp"
           containerPort = 7860
           hostPort      = 7860
           protocol      = "tcp"
@@ -619,13 +710,13 @@ resource "aws_ecs_task_definition" "genai_tc_fe_td" {
         },
         {
           name  = "SD_BACKEND_URL"
-          value = "http://genai-tc-be.genai.local:5000"
+          value = "http://gaitg-be.gaitg.local:5000"
         }
       ]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = "/ecs/genai-tc-fe"
+          awslogs-group         = "/ecs/gaitg-fe"
           awslogs-region        = "eu-west-2"
           awslogs-stream-prefix = "ecs"
           awslogs-create-group  = "true"
@@ -637,116 +728,69 @@ resource "aws_ecs_task_definition" "genai_tc_fe_td" {
   ])
 }
 
-
+#
+# Front End Service
+#
 resource "aws_ecs_service" "gaitg_fe_service" {
-    availability_zone_rebalancing      = "ENABLED"
-    cluster                            = aws_ecs_cluster.genai.arn
-    deployment_maximum_percent         = 200
-    deployment_minimum_healthy_percent = 100
-    desired_count                      = 1
-    enable_ecs_managed_tags            = true
-    enable_execute_command             = false
-    health_check_grace_period_seconds  = 0
-    #id                                 = "arn:aws:ecs:eu-west-2:637423404396:service/genai-web-cluster/genai-tc-fe-alb"
-    launch_type                        = null
-    name                               = "genai-tc-fe-alb"
-    platform_version                   = null
-    propagate_tags                     = "NONE"
-    scheduling_strategy                = "REPLICA"
-    tags                               = {}
-    tags_all                           = {}
-    task_definition                    = aws_ecs_task_definition.genai_tc_fe_td.arn
-    triggers                           = {}
+  availability_zone_rebalancing      = "ENABLED"
+  cluster                            = aws_ecs_cluster.gaitg_cluster.arn
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+  desired_count                      = 1
+  enable_ecs_managed_tags            = true
+  enable_execute_command             = false
+  health_check_grace_period_seconds  = 0
+  launch_type                        = null
+  name                               = "gaitg-fe"
+  platform_version                   = null
+  propagate_tags                     = "NONE"
+  scheduling_strategy                = "REPLICA"
+  tags                               = {}
+  tags_all                           = {}
+  task_definition                    = aws_ecs_task_definition.gaitg_fe_td.arn
+  triggers                           = {}
 
-    capacity_provider_strategy {
-        base              = 0
-        #capacity_provider = "Infra-ECS-Cluster-genai-web-cluster-96d1f640-EC2CapacityProvider-XFtKLZVEjtAa"
-        capacity_provider = aws_ecs_capacity_provider.genai_cp.name
-        weight            = 1
-    }
+  capacity_provider_strategy {
+    base              = 0
+    capacity_provider = aws_ecs_capacity_provider.gaitg_cp.name
+    weight            = 1
+  }
 
-    deployment_circuit_breaker {
-        enable   = true
-        rollback = true
-    }
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
-    deployment_controller {
-        type = "ECS"
-    }
+  deployment_controller {
+    type = "ECS"
+  }
 
-    load_balancer {
-        container_name   = "genai-fe-task-container"
-        container_port   = 7860
-        elb_name         = null
-        #target_group_arn = "arn:aws:elasticloadbalancing:eu-west-2:637423404396:targetgroup/ecs-genai--genai-tc-fe-alb/87135871de8a1a63"
-        target_group_arn = aws_lb_target_group.existing_genai_fe_target.arn
-    }
+  load_balancer {
+    container_name   = "gaitg-fe-task-container"
+    container_port   = 7860
+    elb_name         = null
+    target_group_arn = aws_lb_target_group.gaitg_fe_tg.arn
+  }
 
-    network_configuration {
-        assign_public_ip = false
-        security_groups  = [
-#            "sg-028fbf6c4c46ef684",
-            aws_security_group.gaitg_app_sg.id,
-#            "sg-04814b3dd0087fbae",
-        ]
-        subnets          = [
-             aws_subnet.subnet_a.id,
-             aws_subnet.subnet_b.id,
-             aws_subnet.subnet_c.id
-#            "subnet-044ed30457d097ec8",
-#            "subnet-048f197fce1668d85",
-#            "subnet-093f92443cb5b3bf5",
-        ]
-    }
+  network_configuration {
+    assign_public_ip = false
+    security_groups  = [
+      aws_security_group.gaitg_app_sg.id,
+    ]
+    subnets          = [
+      aws_subnet.subnet_a.id,
+      aws_subnet.subnet_b.id,
+      aws_subnet.subnet_c.id
+    ]
+  }
 
-    ordered_placement_strategy {
-        field = "attribute:ecs.availability-zone"
-        type  = "spread"
-    }
-    ordered_placement_strategy {
-        field = "instanceId"
-        type  = "spread"
-    }
-}
-
-resource "aws_vpc_endpoint" "bedrock_runtime" {
-#  vpc_id            = "vpc-04fae15b271dcd9a6"
-  vpc_id            = aws_vpc.gaitg_vpc.id
-  service_name      = "com.amazonaws.eu-west-2.bedrock-runtime"
-  vpc_endpoint_type = "Interface"
-    #subnet_ids        = ["subnet-044ed30457d097ec8", "subnet-048f197fce1668d85"] 
-    subnet_ids        = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id, aws_subnet.subnet_c.id]
-
-  #security_group_ids = ["sg-04814b3dd0087fbae", "sg-0351278568261466e"]
-  security_group_ids = [aws_security_group.gaitg_app_sg.id, aws_security_group.gaitg_bedrock_access_sg.id]
-
-  private_dns_enabled = true
-}
-
-resource "aws_service_discovery_private_dns_namespace" "genai_local" {
-  name        = "genai.local"
-  description = "For the genai tc application"
-#  vpc         = "vpc-04fae15b271dcd9a6"
-  vpc        = aws_vpc.gaitg_vpc.id
-
-  tags = {
-    Name = "genai.local"
+  ordered_placement_strategy {
+    field = "attribute:ecs.availability-zone"
+    type  = "spread"
+  }
+  ordered_placement_strategy {
+    field = "instanceId"
+    type  = "spread"
   }
 }
-
-resource "aws_service_discovery_service" "genai_tc_be" {
-  name = "genai-tc-be"
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.genai_local.id
-    dns_records {
-      type = "A"
-      ttl  = 15
-    }
-    routing_policy = "MULTIVALUE"
-  }
-  health_check_custom_config {
-    failure_threshold = 1
-  }
-}
-
 
