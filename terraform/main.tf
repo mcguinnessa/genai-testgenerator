@@ -1,3 +1,8 @@
+####################################################################
+#
+# TERRAFORM FILE TO DEPLOY GENAI TEST GENERATOR
+#
+####################################################################
 terraform {
   required_providers {
     aws = {
@@ -14,6 +19,12 @@ provider "aws" {
 
 }
 
+####################################################################
+#
+# NETWORKING CONFIGURATION
+#
+####################################################################
+
 #
 # VPC
 #
@@ -26,6 +37,9 @@ resource "aws_vpc" "gaitg_vpc" {
   }
 }
 
+#
+# Internet Gateway, allows outward access to the internet
+#
 resource "aws_internet_gateway" "gaitg_igw" {
   vpc_id = aws_vpc.gaitg_vpc.id
 
@@ -34,6 +48,9 @@ resource "aws_internet_gateway" "gaitg_igw" {
   }
 }
 
+#
+# Routing Table, routes to IGW
+#
 resource "aws_route_table" "gaitg-rt" {
   vpc_id = aws_vpc.gaitg_vpc.id
 
@@ -47,6 +64,33 @@ resource "aws_route_table" "gaitg-rt" {
   }
 }
 
+#
+# Subnets
+#
+resource "aws_subnet" "subnet_a" {
+  vpc_id                  =aws_vpc.gaitg_vpc.id
+  availability_zone       = "eu-west-2a"
+  cidr_block              = "172.31.16.0/20" 
+  map_public_ip_on_launch = true
+}
+
+resource "aws_subnet" "subnet_b" {
+  vpc_id                  =aws_vpc.gaitg_vpc.id
+  availability_zone       = "eu-west-2b"
+  cidr_block              = "172.31.32.0/20" 
+  map_public_ip_on_launch = true
+}
+
+resource "aws_subnet" "subnet_c" {
+  vpc_id                  =aws_vpc.gaitg_vpc.id
+  availability_zone       = "eu-west-2c"
+  cidr_block              = "172.31.0.0/20" 
+  map_public_ip_on_launch = true
+}
+
+#
+# Adds associations for each subnet
+#
 resource "aws_route_table_association" "subnet_a" {
   subnet_id      = aws_subnet.subnet_a.id
   route_table_id = aws_route_table.gaitg-rt.id
@@ -62,172 +106,128 @@ resource "aws_route_table_association" "subnet_c" {
   route_table_id = aws_route_table.gaitg-rt.id
 }
 
-
-
-resource "aws_subnet" "subnet_a" {
-#  vpc_id                  = aws_vpc.main.id
-  vpc_id                  =aws_vpc.gaitg_vpc.id
-  availability_zone       = "eu-west-2a"
-  cidr_block              = "172.31.16.0/20" 
-  map_public_ip_on_launch = true
-}
-
-resource "aws_subnet" "subnet_b" {
-#  vpc_id                  = aws_vpc.main.id
-  vpc_id                  =aws_vpc.gaitg_vpc.id
-  availability_zone       = "eu-west-2b"
-  cidr_block              = "172.31.32.0/20" 
-  map_public_ip_on_launch = true
-}
-
-resource "aws_subnet" "subnet_c" {
-#  vpc_id                  = aws_vpc.main.id
-  vpc_id                  =aws_vpc.gaitg_vpc.id
-  availability_zone       = "eu-west-2c"
-  cidr_block              = "172.31.0.0/20" 
-  map_public_ip_on_launch = true
-}
-
+####################################################################
+#
+# SECURITY GROUPS
+#
+####################################################################
 
 #
-# Security Groups
+# Allows front end to connect to back end
+#  - allows traffic from itself
 #
-
-#Allows front and back end to connect
-#resource "aws_security_group" "genai_tc_app_sg" {
-resource "aws_security_group" "genai_tc_app" {
-# Configuration will be filled in after import
-#No special rules
-
-    name        = "genai-tc-app"
-#    arn         = "arn:aws:ec2:eu-west-2:637423404396:security-group/sg-04814b3dd0087fbae"
-    description = "Allows the fe and be to connect"
-    egress      = [
-        {
-            cidr_blocks      = [
-                "0.0.0.0/0",
-            ]
-            description      = null
-            from_port        = 0
-            ipv6_cidr_blocks = []
-            prefix_list_ids  = []
-            protocol         = "-1"
-            security_groups  = []
-            self             = false
-            to_port          = 0
-        },
-    ]
-#    id          = "sg-04814b3dd0087fbae"
-#    ingress     = []
-
+resource "aws_security_group" "gaitg_app_sg" {
+  name        = "genai-tc-app-sg"
+  description = "Allows the fe and be to connect"
+  egress      = [ 
+    {
+      cidr_blocks      = [
+        "0.0.0.0/0",
+      ]
+      description      = null
+      from_port        = 0
+      ipv6_cidr_blocks = []
+      prefix_list_ids  = []
+      protocol         = "-1"
+      security_groups  = []
+      self             = false
+      to_port          = 0
+    },
+  ]
   ingress  = [ 
-     {
+    {
       cidr_blocks      = [ ]
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    self            = true
-    description     = "Allow all traffic from itself"
+      from_port       = 0
+      to_port         = 0
+      protocol        = "-1"
+      self            = true
+      description     = "Allow all traffic from itself"
       ipv6_cidr_blocks = []
       prefix_list_ids  = []
       security_groups  = []
     }
-   ]
-
-#    name_prefix = null
-#    owner_id    = "637423404396"
-#    tags        = {}
-#    tags_all    = {}
-#    vpc_id      = "vpc-04fae15b271dcd9a6"
+  ]
   vpc_id        = aws_vpc.gaitg_vpc.id
 }
 
-#Allows connectivity to the front facing UI
-#resource "aws_security_group" "genai-tc-ui-web-sg" {
-resource "aws_security_group" "genai_ui_web" {
-# Configuration will be filled in after import
-#TCP 0.0.0.0 inbound to 80
-
-    name        = "genai-ui-web"
-#    arn         = "arn:aws:ec2:eu-west-2:637423404396:security-group/sg-0ea61b6e71b168969"
-    description = "SG for front end for Gen AI TC UI"
-    egress      = [
-        {
-            cidr_blocks      = [
-                "0.0.0.0/0",
-            ]
-            description      = null
-            from_port        = 0
-            ipv6_cidr_blocks = []
-            prefix_list_ids  = []
-            protocol         = "-1"
-            security_groups  = []
-            self             = false
-            to_port          = 0
-        },
-    ]
-#    id          = "sg-0ea61b6e71b168969"
-    ingress     = [
-        {
-            cidr_blocks      = [
-                "0.0.0.0/0",
-            ]
-            description      = null
-            from_port        = 80
-            ipv6_cidr_blocks = []
-            prefix_list_ids  = []
-            protocol         = "tcp"
-            security_groups  = []
-            self             = false
-            to_port          = 80
-        },
-    ]
-#    vpc_id      = "vpc-04fae15b271dcd9a6"
-    vpc_id        = aws_vpc.gaitg_vpc.id
+#
+# Allows Load balancer to connect to front end
+#  - allows incoming traffic from the internet on the HTTP port
+#
+resource "aws_security_group" "gaitg_webui_sg" {
+  name        = "genai-ui-web-sg"
+  description = "SG for front end for Gen AI TC UI"
+  egress      = [
+    {
+      cidr_blocks      = [
+        "0.0.0.0/0",
+      ]
+      description      = null
+      from_port        = 0
+      ipv6_cidr_blocks = []
+      prefix_list_ids  = []
+      protocol         = "-1"
+      security_groups  = []
+      self             = false
+        to_port          = 0
+    },
+  ]
+  ingress     = [
+    {
+      cidr_blocks      = [
+        "0.0.0.0/0",
+      ]
+      description      = null
+      from_port        = 80
+      ipv6_cidr_blocks = []
+      prefix_list_ids  = []
+      protocol         = "tcp"
+      security_groups  = []
+      self             = false
+      to_port          = 80
+    },
+  ]
+  vpc_id        = aws_vpc.gaitg_vpc.id
 }
 
-#Allows connectivity to bedrock
-resource "aws_security_group" "genai_tc_bedrock_access" {
-# Configuration will be filled in after import
-#Inbound HTTPS 443 from genai-tc-app
-
-    name        = "genai-tc-bedrock-access"
-#    arn         = "arn:aws:ec2:eu-west-2:637423404396:security-group/sg-0351278568261466e"
-    description = "Allows access to bedrock"
-    egress      = [
-        {
-            cidr_blocks      = [
-                "0.0.0.0/0",
-            ]
-            description      = null
-            from_port        = 0
-            ipv6_cidr_blocks = []
-            prefix_list_ids  = []
-            protocol         = "-1"
-            security_groups  = []
-            self             = false
-            to_port          = 0
-       },
-    ]
-#    id          = "sg-0351278568261466e"
-    ingress     = [
-        {
-            cidr_blocks      = []
-            description      = null
-            from_port        = 443
-            ipv6_cidr_blocks = []
-            prefix_list_ids  = []
-            protocol         = "tcp"
-            security_groups  = [
-#                "sg-04814b3dd0087fbae",
-                aws_security_group.genai_tc_app.id,
-            ]
-            self             = false
-            to_port          = 443
-        },
-    ]
-#    vpc_id      = "vpc-04fae15b271dcd9a6"
-    vpc_id        = aws_vpc.gaitg_vpc.id
+#
+# Allows backend to connect to bedrock
+#  - allows incoming traffic from the app security group on HTTPS port 
+#
+resource "aws_security_group" "gaitg_bedrock_access_sg" {
+  name        = "genai-tc-bedrock-access-sg"
+  description = "Allows access to bedrock"
+  egress      = [
+    {
+       cidr_blocks      = [
+         "0.0.0.0/0",
+       ]
+       description      = null
+       from_port        = 0
+       ipv6_cidr_blocks = []
+       prefix_list_ids  = []
+       protocol         = "-1"
+       security_groups  = []
+       self             = false
+       to_port          = 0
+    },
+  ]
+  ingress     = [
+    {
+      cidr_blocks      = []
+      description      = null
+      from_port        = 443
+      ipv6_cidr_blocks = []
+      prefix_list_ids  = []
+      protocol         = "tcp"
+      security_groups  = [
+        aws_security_group.gaitg_app_sg.id,
+      ]
+      self             = false
+      to_port          = 443
+    },
+  ]
+  vpc_id        = aws_vpc.gaitg_vpc.id
 }
 
 
@@ -279,13 +279,6 @@ resource "aws_iam_role_policy_attachment" "ecs_attach_execution" {
 
 
 
-#resource "aws_iam_instance_profile" "ecs_instance_profile" {
-#  name = "ecsInstanceProfile"
-#  role = aws_iam_role.ecs_instance_role.name
-#}
-
-
-
 
 # Launch Template
 resource "aws_launch_template" "ecs_lt" {
@@ -329,9 +322,6 @@ resource "aws_autoscaling_group" "ecs_asg" {
     aws_subnet.subnet_a.id,
     aws_subnet.subnet_b.id,
     aws_subnet.subnet_c.id
-#    "subnet-093f92443cb5b3bf5",
-#    "subnet-048f197fce1668d85",
-#    "subnet-044ed30457d097ec8"
   ]
   launch_template {
     id      = aws_launch_template.ecs_lt.id
@@ -387,16 +377,11 @@ resource "aws_lb" "genai_tc_lb" {
   name               = "genai-tc-lb"
   internal           = false
   load_balancer_type = "application"
-  #security_groups    = ["sg-028fbf6c4c46ef684", "sg-0ea61b6e71b168969"]
-  #security_groups    = ["sg-028fbf6c4c46ef684", aws_security_group.genai_ui_web.id]
-  security_groups    = [aws_security_group.genai_tc_app.id, aws_security_group.genai_ui_web.id]
+  security_groups    = [aws_security_group.gaitg_app_sg.id, aws_security_group.gaitg_webui_sg.id]
   subnets            = [
     aws_subnet.subnet_a.id,
     aws_subnet.subnet_b.id,
     aws_subnet.subnet_c.id
-#    "subnet-093f92443cb5b3bf5", # eu-west-2a
-#    "subnet-048f197fce1668d85", # eu-west-2c
-#    "subnet-044ed30457d097ec8"  # eu-west-2b
   ]
   ip_address_type = "ipv4"
 
@@ -404,8 +389,6 @@ resource "aws_lb" "genai_tc_lb" {
     Name = "genai-tc-lb"
   }
 }
-
-
 
 
 resource "aws_lb_target_group" "existing_genai_fe_target" {
@@ -531,7 +514,7 @@ resource "aws_ecs_task_definition" "genai_tc_be_td" {
 
 
 # Service for back end process
-resource "aws_ecs_service" "genai-tc-be" {
+resource "aws_ecs_service" "gaitg_be_service" {
 #    availability_zone_rebalancing      = "ENABLED"
 #    cluster                            = "arn:aws:ecs:eu-west-2:637423404396:cluster/genai-web-cluster"
     cluster                            = aws_ecs_cluster.genai.arn
@@ -562,7 +545,7 @@ resource "aws_ecs_service" "genai-tc-be" {
 #            "sg-04814b3dd0087fbae",
         security_groups  = [
 #            "sg-028fbf6c4c46ef684",
-            aws_security_group.genai_tc_app.id,
+            aws_security_group.gaitg_app_sg.id,
         ]
         subnets          = [
             aws_subnet.subnet_a.id,
@@ -655,8 +638,7 @@ resource "aws_ecs_task_definition" "genai_tc_fe_td" {
 }
 
 
-# aws_ecs_service.genai_tc_fe_alb:
-resource "aws_ecs_service" "genai_tc_fe_alb" {
+resource "aws_ecs_service" "gaitg_fe_service" {
     availability_zone_rebalancing      = "ENABLED"
     cluster                            = aws_ecs_cluster.genai.arn
     deployment_maximum_percent         = 200
@@ -704,7 +686,7 @@ resource "aws_ecs_service" "genai_tc_fe_alb" {
         assign_public_ip = false
         security_groups  = [
 #            "sg-028fbf6c4c46ef684",
-            aws_security_group.genai_tc_app.id,
+            aws_security_group.gaitg_app_sg.id,
 #            "sg-04814b3dd0087fbae",
         ]
         subnets          = [
@@ -736,7 +718,7 @@ resource "aws_vpc_endpoint" "bedrock_runtime" {
     subnet_ids        = [aws_subnet.subnet_a.id, aws_subnet.subnet_b.id, aws_subnet.subnet_c.id]
 
   #security_group_ids = ["sg-04814b3dd0087fbae", "sg-0351278568261466e"]
-  security_group_ids = [aws_security_group.genai_tc_app.id, aws_security_group.genai_tc_bedrock_access.id]
+  security_group_ids = [aws_security_group.gaitg_app_sg.id, aws_security_group.gaitg_bedrock_access_sg.id]
 
   private_dns_enabled = true
 }
